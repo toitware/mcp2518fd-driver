@@ -16,6 +16,9 @@ CLOCK_DIVISOR_10 ::= 0b11
 PAYLOAD_SIZE_8  ::= 0
 PAYLOAD_SIZE_64  ::= 7
 
+/**
+Driver for MCP2518FD CAN bus controllers, using SPI.
+*/
 class Driver:
   static CON_REG_       ::= 0x000
   static NBTCFG_REG_    ::= 0x004
@@ -57,14 +60,20 @@ class Driver:
   transmit_fifo_full_ := false
   max_payload_/int := PAYLOAD_SIZE_8
 
+  /**
+  Initializes a Driver and sets up internal datastructures.
+
+  Call $configure to fully activate the CAN bus.
+  */
   constructor .device --send_queue_size=8 --receive_queue_size=64:
     send_queue_ = Channel_ send_queue_size
     receive_queue_ = Channel_ receive_queue_size
 
-  on:
+  /**
+  Configures the driver for the CAN bus.
 
-  off:
-
+  It's currently hardcoded to 500kHz.
+  */
   configure
       --clock_divide=CLOCK_DIVISOR_10
       --max_payload=PAYLOAD_SIZE_8:
@@ -90,7 +99,7 @@ class Driver:
     con0 := 0b0110_0000
     write_u8_ CON_REG_ 0 con0
 
-    // Configure DTC.
+    // Configure TDC.
     tdc := 1 << 25 // Enable Edge Filtering during Bus Integration state bit.
     tdc |= 1 << 17 // Auto TDC.
     TCDO ::= 0 & 0x7F
@@ -134,6 +143,25 @@ class Driver:
 
     enter_mode_ MODE_NORMAL_CAN_
 
+  /**
+  Configures and enables a filter.
+
+  Index is 0-based.
+  */
+  add_filter index/int mask/int obj/int:
+    write_u32_ (filter_mask_reg_ index) mask
+    write_u32_ (filter_obj_reg_ index) obj
+    flt_con0 := 1 << 7 // Filter is enabled
+    // Add messages to receive FIFO.
+    flt_con0 |= RECEIVE_FIFO_INDEX_
+    write_u8_ (filter_con_reg_ index) 0 flt_con0
+
+  /**
+  Run the interrupt rutine. Without this, the driver will not be able to
+    send or receive messages.
+
+  This methods blocks for the lifecycle of the driver.
+  */
   run interrupt/gpio.Pin:
     while true:
       process_interrupts_
@@ -143,15 +171,24 @@ class Driver:
 
       interrupt.wait_for 0
 
+  /**
+  Send the message on the CAN bus.
+
+  The call returns as soon as the message has been enqueued, not when the
+  message is flushed to the CAN bus..
+  */
   send msg/Message:
     if transmit_fifo_full_:
       send_queue_.send msg
     else:
-      print
-        Duration.of:
-          send_ msg
+      send_ msg
 
-  receive:
+  /**
+  Receives the next messages on the CAN bus.
+
+  Blocks until a message is available.
+  */
+  receive -> Message:
     return receive_queue_.receive
 
   send_ msg/Message:
@@ -258,17 +295,7 @@ class Driver:
 
     print "UNHANDLED: $flags"
 
-  // Configure, and enable, a filter.
-  // Index is 0-based.
-  add_filter index/int mask/int obj/int:
-    write_u32_ (filter_mask_reg_ index) mask
-    write_u32_ (filter_obj_reg_ index) obj
-    flt_con0 := 1 << 7 // Filter is enabled
-    // Add messages to receive FIFO.
-    flt_con0 |= RECEIVE_FIFO_INDEX_
-    write_u8_ (filter_con_reg_ index) 0 flt_con0
-
-  // Configure a FIFO buffer.
+  // Configures a FIFO buffer..
   // Index is 1-based.
   configure_fifo_ index/int --size/int=1 --tx=false --priority/int=0:
     if tx:
