@@ -1,0 +1,6 @@
+# Toit Lock File.
+prefixes:
+  mcp2518fd: ..
+packages:
+  ..:
+    path: ..
