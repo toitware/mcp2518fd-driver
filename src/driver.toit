@@ -165,6 +165,8 @@ class Driver:
   This methods blocks for the lifecycle of the driver.
   */
   run interrupt/gpio.Pin:
+    interrupt.config --input
+
     while true:
       process_interrupts_
       while not transmit_fifo_full_:
