@@ -54,6 +54,9 @@ class Driver:
 
   device/spi.Device
 
+  /// Accumulated number of messages that was dropped, due to queue overflow.
+  num_dropped_mesages/int := 0
+
   buffer_/ByteArray ::= ByteArray 74
 
   send_queue_/Channel_
@@ -258,9 +261,9 @@ class Driver:
     rec_con1 := 0b1
     write_u8_ (fifocon_reg_ RECEIVE_FIFO_INDEX_) 1 rec_con1
 
-    // TODO(anders): Drop messages if full?
-    receive_queue_.send
-      Message id data
+    msg := Message id data
+    if not receive_queue_.try_send msg:
+      num_dropped_mesages++
 
   payload_size_length_ payload_size/int:
     if payload_size == PAYLOAD_SIZE_8: return 8
@@ -296,6 +299,9 @@ class Driver:
 
       // RXOVIF
       if flags & (1 << 11) != 0:
+        // Clear RXOVIF flag on receive buffer.
+        write_u8_ (fifosta_reg_ RECEIVE_FIFO_INDEX_) 0 ~(1 << 3)
+        num_dropped_mesages++
 
     print "UNHANDLED: $flags"
 
