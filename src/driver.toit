@@ -138,7 +138,7 @@ class Driver:
     configure_fifo_ device TRANSMIT_FIFO_INDEX_ --tx
 
     // Add accept-all filter.
-    add_filter 0 0 0
+    add_filter_ device 0 0 0
 
     // Enable RX and TX interrupts.
     int2 := 0b11
