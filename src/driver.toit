@@ -57,7 +57,7 @@ class Driver:
   device_/spi.Device
   device_mutex_/monitor.Mutex ::= monitor.Mutex
 
-  /// Accumulated number of messages that was dropped, due to queue overflow.
+  /// Accumulated number of messages that were dropped, due to queue overflow.
   num_dropped_mesages/int := 0
   /// Accumulated number of system errors of the CAN controller.
   num_system_errors/int := 0
@@ -143,7 +143,7 @@ class Driver:
     // Enable RX and TX interrupts.
     int2 := 0b11
     write_u8_ device INT_REG_ 2 int2
-    // Enable TXATIE an SERRIE.
+    // Enable TXATIE and SERRIE.
     int3 := 0b10100
     write_u8_ device INT_REG_ 3 int3
 
@@ -182,13 +182,14 @@ class Driver:
     write_u8_ device (filter_con_reg_ index) 0 flt_con0
 
   /**
-  Run the interrupt rutine. Without this, the driver will not be able to
+  Run the interrupt routine. Without this, the driver will not be able to
     send or receive messages.
 
-  This methods blocks for the lifecycle of the driver.
+  This method blocks for the lifecycle of the driver, and should be called
+    from a dedicated task.
 
   If the interrupt pin is triggered repeatedly without any events from the
-    controller, $run will throw. This indicates that the interrupt pin
+    controller, $run will throw. This probably indicates that the interrupt pin
     is wrongly configured.
   */
   run interrupt/gpio.Pin:
@@ -202,7 +203,7 @@ class Driver:
       else:
         no_events_count++
         if no_events_count > 5:
-          throw "bad interrupt pin state"
+          throw "possibly wrong interrupt pin number"
 
       while not transmit_fifo_full_:
         msg := send_queue_.try_receive
