@@ -93,6 +93,12 @@ class Driver:
         --clock_divide=clock_divide
         --max_payload=max_payload
 
+  recover_ device/spi.Device:
+    num_system_errors++
+    configure_ device
+      --clock_divide=clock_divide_
+      --max_payload=max_payload_
+
   configure_
       device/spi.Device
       --clock_divide=CLOCK_DIVISOR_10
@@ -209,7 +215,19 @@ class Driver:
         msg := send_queue_.try_receive
         if not msg: break
 
-      interrupt.wait_for 0
+      while true:
+        e := catch --unwind=(: it != DEADLINE_EXCEEDED_ERROR):
+          with_timeout --ms=250:
+            interrupt.wait_for 0
+            break
+        if e:
+          device_mutex_.do:
+            // Check if the device was rebooted by reading the mode.
+            // It powers up in configuration mode.
+            if (get_mode_ device_) == MODE_CONFIGURATION_:
+              recover_ device_
+
+
 
   /**
   Send the message on the CAN bus.
@@ -316,10 +334,8 @@ class Driver:
           if flags & ~KNOWN_FLAGS_ != 0: throw "UNEXPECTED FLAGS: 0x$(flags.stringify 16)"
 
           if flags & (1 << 12) != 0:
-            num_system_errors++
-            configure_ device_
-              --clock_divide=clock_divide_
-              --max_payload=max_payload_
+            write_u8_ device_ INT_REG_ 1 ~(1 << 4)
+            recover_ device_
             return true
 
           // RXIF.
