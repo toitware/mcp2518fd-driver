@@ -215,15 +215,17 @@ class Driver:
         msg := send_queue_.try_receive
         if not msg: break
 
-      e := catch --unwind=(: it != DEADLINE_EXCEEDED_ERROR):
-        with_timeout --ms=250:
-          interrupt.wait_for 0
-      if e:
-        device_mutex_.do:
-          // Check if the device was rebooted by reading the mode.
-          // It powers up in configuration mode.
-          if (get_mode_ device_) == MODE_CONFIGURATION_:
-            recover_ device_
+      while true:
+        e := catch --unwind=(: it != DEADLINE_EXCEEDED_ERROR):
+          with_timeout --ms=250:
+            interrupt.wait_for 0
+            break
+        if e:
+          device_mutex_.do:
+            // Check if the device was rebooted by reading the mode.
+            // It powers up in configuration mode.
+            if (get_mode_ device_) == MODE_CONFIGURATION_:
+              recover_ device_
 
 
 
