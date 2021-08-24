@@ -72,7 +72,7 @@ class Driver:
 
   /// Accumulated number of messages that were dropped, due to queue overflow.
   num_dropped_messages/int := 0
-  /// Accumulated number of invalid messages recieved.
+  /// Accumulated number of invalid messages received.
   num_invalid_messages/int := 0
   /// Accumulated number of CAN bus errors.
   num_can_bus_errors/int := 0
@@ -91,7 +91,7 @@ class Driver:
   clko_/int? := 0
 
   /**
-  Initializes a Driver and sets up internal datastructures.
+  Initializes a Driver and sets up internal data structures.
 
   Call $configure to fully activate the CAN bus.
   */
@@ -212,7 +212,7 @@ class Driver:
       pll_control = PLL_ENABLE_10X
       s_clock_divide = S_CLOCK_DIVISOR_1
     else:
-      throw "Unupported oscillator input"
+      throw "Unsupported oscillator input"
 
     // Now that we know how we got our SYS_CLOCK we also have the input to the
     // CLKO divider.
@@ -241,7 +241,7 @@ class Driver:
     // the time quantum that we use to specify timings.
 
     // Could perhaps go to 320 with 80% sample point - but can the hardware
-    // then still autoadjust to cover over small clock differences?
+    // then still auto-adjust to cover over small clock differences?
     MAX_TQ_PER_CYCLE := 256
 
     brp/int := 1
@@ -503,7 +503,7 @@ class Driver:
             write_u8_ device_ (fifosta_reg_ RECEIVE_FIFO_INDEX_) 0 ~(1 << 3)
             num_dropped_messages++
 
-          // IVMIF Invalid message occured.
+          // IVMIF Invalid message occurred.
           if flags & (1 << 15) != 0:
             num_invalid_messages++
             // Clear the IVMIF bit.
