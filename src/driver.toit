@@ -507,13 +507,13 @@ class Driver:
           if flags & (1 << 15) != 0:
             num_invalid_messages++
             // Clear the IVMIF bit.
-            write_u8_ device_ INT_REG_ 0 ~(1 << 15)
+            write_u8_ device_ INT_REG_ 1 ~(1 << 7)
 
           // CERRIF CAN Bus error.
           if flags & (1 << 13) != 0:
             num_can_bus_errors++
             // Clear the IVMIF bit.
-            write_u8_ device_ INT_REG_ 0 ~(1 << 13)
+            write_u8_ device_ INT_REG_ 1 ~(1 << 5)
 
 
       // Sleep for a short while to not starve.
