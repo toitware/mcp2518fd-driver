@@ -10,10 +10,19 @@ import serial.protocols.spi as spi
 import .message
 import .channel
 
+// CLKODIV.
 CLOCK_DIVISOR_1  ::= 0b00
 CLOCK_DIVISOR_2  ::= 0b01
 CLOCK_DIVISOR_4  ::= 0b10
 CLOCK_DIVISOR_10 ::= 0b11
+
+// SCLKDIV.
+S_CLOCK_DIVISOR_1 := 0b0
+S_CLOCK_DIVISOR_2 := 0b1
+
+// PLLEN.
+PLL_DISABLE ::= 0b0
+PLL_ENABLE_10X ::= 0b1
 
 PAYLOAD_SIZE_8  ::= 0
 PAYLOAD_SIZE_64  ::= 7
@@ -32,10 +41,14 @@ class Driver:
   static IOCON_REG_     ::= 0xE04
   static DEVID_REG_     ::= 0xE14
 
-  static MODE_CONFIGURATION_  ::= 0b100
-  static MODE_LISTEN_ONLY_    ::= 0b011
-  static MODE_NORMAL_         ::= 0b000
-  static MODE_NORMAL_CAN_     ::= 0b110
+  static MODE_NORMAL_               ::= 0b000  // Mix CAN FD and Classic CAN 2.0 frames.
+  static MODE_SLEEP_                ::= 0b001
+  static MODE_INTERNAL_LOOPBACK_    ::= 0b010
+  static MODE_LISTEN_ONLY_          ::= 0b011
+  static MODE_CONFIGURATION_        ::= 0b100
+  static MODE_EXTERNAL_LOOPBACK_    ::= 0b101
+  static MODE_NORMAL_CAN_           ::= 0b110  // Normal CAN 2.0 mode; error on CAN FD frames.
+  static MODE_RESTRICTED_OPERATION_ ::= 0b111
 
   static FIFO_RX_CON0_  ::= 0b0000_1001  // Enable TFNRFNIE and RXOVIE.
   static FIFO_TX_CON0_  ::= 0b1001_0000  // Set TX marker and enable TXATIE.
@@ -52,13 +65,17 @@ class Driver:
   static SPI_READ_COMMAND_  ::= 0b0011 << 12
   static SPI_WRITE_COMMAND_ ::= 0b0010 << 12
 
-  static KNOWN_FLAGS_ ::= 0b1_1100_0000_1011
+  static KNOWN_FLAGS_ ::= 0b1011_1100_0000_1011
 
   device_/spi.Device
   device_mutex_/monitor.Mutex ::= monitor.Mutex
 
   /// Accumulated number of messages that were dropped, due to queue overflow.
-  num_dropped_mesages/int := 0
+  num_dropped_messages/int := 0
+  /// Accumulated number of invalid messages received.
+  num_invalid_messages/int := 0
+  /// Accumulated number of CAN bus errors.
+  num_can_bus_errors/int := 0
   /// Accumulated number of system errors of the CAN controller.
   num_system_errors/int := 0
 
@@ -68,11 +85,13 @@ class Driver:
   receive_queue_/Channel_
 
   transmit_fifo_full_ := false
+  bit_rate_/int := 0
+  oscillator_/int := 0
   max_payload_/int := PAYLOAD_SIZE_8
-  clock_divide_/int := CLOCK_DIVISOR_10
+  clko_/int? := 0
 
   /**
-  Initializes a Driver and sets up internal datastructures.
+  Initializes a Driver and sets up internal data structures.
 
   Call $configure to fully activate the CAN bus.
   */
@@ -83,36 +102,50 @@ class Driver:
   /**
   Configures the driver for the CAN bus.
 
-  It's currently hardcoded to 500kHz.
+  $bit_rate can be "round numbers" that divide neatly into a 20MHz clock,
+    like 200kHz, 250kHz, 500kHz.
+  $oscillator specifies the speed of the crystal feeding into the chip, usually
+    4, 20, or 40MHz.
+  $clko specifies the frequency on the CLKO output.  We support 10 and 20MHz.
+    For a 4 or 40MHz crystal we also support 4 or 40MHz clko.
+    For a 2 or 20MHz crystal we also support 2 or 5MHz clko.
+    Default is an unspecified CLKO speed that depends on the oscillator input.
   */
   configure
-      --clock_divide=CLOCK_DIVISOR_10
-      --max_payload=PAYLOAD_SIZE_8:
+      --bit_rate=500_000
+      --oscillator=40_000_000
+      --max_payload=PAYLOAD_SIZE_8
+      --clko=null:
     device_mutex_.do:
       configure_ device_
-        --clock_divide=clock_divide
+        --bit_rate=bit_rate
+        --oscillator=oscillator
         --max_payload=max_payload
+        --clko=clko
 
   recover_ device/spi.Device:
     num_system_errors++
     configure_ device
-      --clock_divide=clock_divide_
+      --bit_rate=bit_rate_
+      --oscillator=oscillator_
       --max_payload=max_payload_
+      --clko=clko_
 
   configure_
       device/spi.Device
-      --clock_divide=CLOCK_DIVISOR_10
-      --max_payload=PAYLOAD_SIZE_8:
+      --bit_rate/int
+      --oscillator/int
+      --max_payload/int
+      --clko/int?:
     reset_ device
 
+    bit_rate_ = bit_rate
+    oscillator_ = oscillator
     max_payload_ = max_payload
-    clock_divide_ = clock_divide
+    clko_ = clko
 
     // Test access to RAM.
     test_memory_ device
-
-    osc0 := clock_divide << 5
-    write_u8_ device OSC_REG_ 0 osc0
 
     // TODO(anders): Reconfigure SPI frequency when possible.
 
@@ -152,21 +185,126 @@ class Driver:
     // Enable TXATIE and SERRIE.
     int3 := 0b10100
     write_u8_ device INT_REG_ 3 int3
+    
+    // Signal propagation from left to right:
+    //                                         /--Optional divide by 2----SYSCLK----divide-by-BRP----time quantum
+    //   Oscillator input----Optional PLL 10x--
+    //                                         \--Divide by 1,2,4, or 10----CLKO
 
-    // Configure data rate (should be 500k).
-    // TQCount := 4 (PS1=2 + PS2=1 + 1)
-    // 10.4kHz: 192 == PS2=38 + PS1=153 + 1
-    BRP := 20
-    PS1 := 2
-    PS2 := 1
-    nbtcfg := BRP - 1
+    // This SYS_CLOCK speed is possible from all popular oscillator inputs, and
+    // is high enough to give us some good resolution when determining timing.
+    SYS_CLOCK := 20_000_000
+
+    // Find register values to get the SYS_CLOCK we want from the oscillator
+    // input.
+    s_clock_divide/int := ?  // SCLKDIV register.
+    pll_control/int := ?     // PLLEN register.
+    if oscillator == SYS_CLOCK * 2:
+      pll_control = PLL_DISABLE
+      s_clock_divide = S_CLOCK_DIVISOR_2
+    else if oscillator == SYS_CLOCK:
+      pll_control = PLL_DISABLE
+      s_clock_divide = S_CLOCK_DIVISOR_1
+    else if oscillator * 20 == SYS_CLOCK:
+      pll_control = PLL_ENABLE_10X
+      s_clock_divide = S_CLOCK_DIVISOR_2
+    else if oscillator * 10 == SYS_CLOCK:
+      pll_control = PLL_ENABLE_10X
+      s_clock_divide = S_CLOCK_DIVISOR_1
+    else:
+      throw "Unsupported oscillator input"
+
+    // Now that we know how we got our SYS_CLOCK we also have the input to the
+    // CLKO divider.
+    clko_input/int := pll_control == PLL_ENABLE_10X
+      ? oscillator * 10
+      : oscillator
+
+    // Set the CLKO divider to give the requested CLKO output.
+    clock_divide/int := ?  // CLKODIV register.
+    if clko == null:
+      clock_divide = CLOCK_DIVISOR_10
+    else if clko == clko_input:
+      clock_divide = CLOCK_DIVISOR_1
+    else if clko * 2 == clko_input:
+      clock_divide = CLOCK_DIVISOR_2
+    else if clko * 4 == clko_input:
+      clock_divide = CLOCK_DIVISOR_4
+    else if clko * 10 == clko_input:
+      clock_divide = CLOCK_DIVISOR_10
+    else:
+      // In a future driver improvement we might be able to pick a different
+      // SYS_CLOCK speed to unlock different CLKO speeds if necessary.
+      throw "Unsupported clko clko_input=$clko_input, clko=$clko"
+
+    // Choose as low as possible BRP divider to give us maximum resolution of
+    // the time quantum that we use to specify timings.
+
+    // Could perhaps go to 320 with 80% sample point - but can the hardware
+    // then still auto-adjust to cover over small clock differences?
+    MAX_TQ_PER_CYCLE := 256
+
+    brp/int := 1
+    // Normally does zero iterations of this loop.
+    while SYS_CLOCK / (brp * bit_rate_) > MAX_TQ_PER_CYCLE: brp *= 2
+    SCALED_CLOCK := SYS_CLOCK / brp
+
+    // SYNC takes 1 tick of the clock (time quantum, TQ).
+    // TSEG1 ticks then pass before the value is sampled from the data lines.
+    // TSEG2 ticks then pass before the next SYNC.
+    // The clock period is thus (1 + TSEG1 + TSEG2)
+    // Data rate is SYSCLK / (1 + TSEG1 + TSEG2).
+    // See "MCP25xxFD Family Reference Manual" page 16.
+
+    // For example for a SYSCLK of 20MHz, select TSEG1=31, TSEG2=8,
+    // Data rate is 20M / (1 + 31 + 8) = 500kHz
+
+    // TSEG1 and TSEG2 should be picked so the sample point is at 80% of the
+    // clock period, or measured from the live bus.  For now we go with 80%.
+
+    // The following algorithm should support all popular bit rates, including
+    // 62.5kHz, 125kHz, 250kHz, 500kHz, and 1MHz.
+
+    // Popular bit rates and crystals will result in a precise number of time
+    // quanta per cycle.
+    if SCALED_CLOCK % bit_rate_ != 0:
+      // If the division is not accurate we cannot exactly hit that
+      // bit rate.  If someone wants an inexact bit rate like 333kHz
+      // we could soften this requirement.  We may also be able to
+      // do this with non-power-of-two BRP values.
+      throw "Unsupported data rate: $bit_rate ($SCALED_CLOCK)"
+    tq_per_cycle := SCALED_CLOCK / bit_rate_
+    tseg1_plus_tseg2 := tq_per_cycle - 1  // SYNC always takes one time quantum.
+    tseg1/int := (0.8 * tseg1_plus_tseg2).to_int  // Sample point 80% through the clock cycle.
+    tseg2/int := tseg1_plus_tseg2 - tseg1
+
+    if (not 1 <= brp <= 256) or (not 1 <= tseg1 <= 256) or (not 1 <= tseg2 <= 128):
+      throw "Unsupported data rate: $bit_rate"
+
+    // SJW is the jump distance - how fast it maximally adjusts to
+    // automatically track the actual speed on the wire.  The manual recommends
+    // setting this as high as possible, to quickly resynchronize, and examples
+    // tend to set it equal to tseg2.
+    sjw/int := tseg2
+
+    // Configure nominal bit rate (the bit rate used for the arbitration phase.
+    // Currently we don't support switching to a higher bit rate for the data
+    // phase - this is a CAN FD features.
+    // The checks above should ensure that the following values are in the 8-bit
+    // range or 7-bit range as required.
+    nbtcfg := brp - 1
     nbtcfg <<= 8
-    nbtcfg |= PS1 - 1
+    nbtcfg |= tseg1 - 1
     nbtcfg <<= 8
-    nbtcfg |= PS2 - 1
+    nbtcfg |= tseg2 - 1
     nbtcfg <<= 8
-    nbtcfg |= PS2 - 1
+    nbtcfg |= sjw - 1
     write_u32_ device NBTCFG_REG_ nbtcfg
+
+    osc0 := (clock_divide << 5)
+          + (s_clock_divide << 4)
+          + (pll_control)
+    write_u8_ device OSC_REG_ 0 osc0
 
     enter_mode_ device MODE_NORMAL_CAN_
 
@@ -315,7 +453,7 @@ class Driver:
 
     msg := Message id data
     if not receive_queue_.try_send msg:
-      num_dropped_mesages++
+      num_dropped_messages++
 
   payload_size_length_ payload_size/int:
     if payload_size == PAYLOAD_SIZE_8: return 8
@@ -363,7 +501,20 @@ class Driver:
           if flags & (1 << 11) != 0:
             // Clear RXOVIF flag on receive buffer.
             write_u8_ device_ (fifosta_reg_ RECEIVE_FIFO_INDEX_) 0 ~(1 << 3)
-            num_dropped_mesages++
+            num_dropped_messages++
+
+          // IVMIF Invalid message occurred.
+          if flags & (1 << 15) != 0:
+            num_invalid_messages++
+            // Clear the IVMIF bit.
+            write_u8_ device_ INT_REG_ 1 ~(1 << 7)
+
+          // CERRIF CAN Bus error.
+          if flags & (1 << 13) != 0:
+            num_can_bus_errors++
+            // Clear the IVMIF bit.
+            write_u8_ device_ INT_REG_ 1 ~(1 << 5)
+
 
       // Sleep for a short while to not starve.
       sleep --ms=2
