@@ -4,7 +4,7 @@
 
 import gpio
 import binary
-import serial.protocols.spi as spi
+import spi
 
 import mcp2518fd
 
