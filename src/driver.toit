@@ -5,7 +5,7 @@
 import gpio
 import binary
 import monitor
-import serial.protocols.spi as spi
+import spi
 
 import .message
 import .channel
