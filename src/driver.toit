@@ -3,7 +3,7 @@
 // in the LICENSE file.
 
 import gpio
-import binary
+import io
 import monitor
 import spi
 
@@ -185,7 +185,7 @@ class Driver:
     // Enable TXATIE and SERRIE.
     int3 := 0b10100
     write_u8_ device INT_REG_ 3 int3
-    
+
     // Signal propagation from left to right:
     //                                         /--Optional divide by 2----SYSCLK----divide-by-BRP----time quantum
     //   Oscillator input----Optional PLL 10x--
@@ -337,7 +337,7 @@ class Driver:
     is wrongly configured.
   */
   run interrupt/gpio.Pin:
-    interrupt.config --input
+    interrupt.configure --input
 
     no_events_count := 0
 
@@ -406,9 +406,9 @@ class Driver:
     // Write word-aligned.
     words ::= (data.size + 3) / 4
 
-    binary.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_WRITE_COMMAND_
-    binary.LITTLE_ENDIAN.put_uint32 buffer_ 2 id
-    binary.LITTLE_ENDIAN.put_uint32 buffer_ 6 flags
+    io.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_WRITE_COMMAND_
+    io.LITTLE_ENDIAN.put_uint32 buffer_ 2 id
+    io.LITTLE_ENDIAN.put_uint32 buffer_ 6 flags
     buffer_.replace 10 data
 
     // 0-pad to aligned end.
@@ -433,14 +433,14 @@ class Driver:
     ram_offset := read_u32_ device (fifoua_reg_ RECEIVE_FIFO_INDEX_)
     reg := RAM_START_REG_ + ram_offset
 
-    binary.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_READ_COMMAND_
+    io.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_READ_COMMAND_
 
     max_size := payload_size_length_ max_payload_
     device.transfer buffer_ --read --to=10 + max_size
 
     // Decode data in buffer.
-    id := binary.LITTLE_ENDIAN.uint32 buffer_ 2
-    flags := binary.LITTLE_ENDIAN.uint32 buffer_ 6
+    id := io.LITTLE_ENDIAN.uint32 buffer_ 2
+    flags := io.LITTLE_ENDIAN.uint32 buffer_ 6
     if flags & FRAME_FLAG_EXT_ != 0:
       id = (id >> 11) | ((id & 0x7FF) << 18)
 
@@ -547,7 +547,7 @@ class Driver:
     return val >> 5
 
   test_memory_ device/spi.Device:
-    for i := 1; i <= binary.UINT32_MAX; i <<= 1:
+    for i := 1; i <= int.MAX-U32; i <<= 1:
       write_u32_ device RAM_START_REG_ i
       if i != (read_u32_ device RAM_START_REG_): throw "SPI ERROR"
 
@@ -558,29 +558,29 @@ class Driver:
 
   read_u8_ device/spi.Device reg/int byte_offset/int -> int:
     reg += byte_offset
-    binary.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_READ_COMMAND_
+    io.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_READ_COMMAND_
     device.transfer buffer_ --read --to=3
     return buffer_[2]
 
   read_u16_ device/spi.Device reg/int byte_offset/int -> int:
-    binary.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_READ_COMMAND_
+    io.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_READ_COMMAND_
     device.transfer buffer_ --read --to=4
-    return binary.LITTLE_ENDIAN.uint16 buffer_ 2
+    return io.LITTLE_ENDIAN.uint16 buffer_ 2
 
   read_u32_ device/spi.Device reg/int -> int:
-    binary.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_READ_COMMAND_
+    io.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_READ_COMMAND_
     device.transfer buffer_ --read --to=6
-    return binary.LITTLE_ENDIAN.uint32 buffer_ 2
+    return io.LITTLE_ENDIAN.uint32 buffer_ 2
 
   write_u8_ device/spi.Device reg/int byte_offset/int value/int:
     reg += byte_offset
-    binary.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_WRITE_COMMAND_
+    io.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_WRITE_COMMAND_
     buffer_[2] = value
     device.transfer buffer_ --to=3
 
   write_u32_ device/spi.Device reg/int value/int:
-    binary.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_WRITE_COMMAND_
-    binary.LITTLE_ENDIAN.put_uint32 buffer_ 2 value
+    io.BIG_ENDIAN.put_uint16 buffer_ 0 reg | SPI_WRITE_COMMAND_
+    io.LITTLE_ENDIAN.put_uint32 buffer_ 2 value
     device.transfer buffer_ --to=6
 
   reset_ device/spi.Device:

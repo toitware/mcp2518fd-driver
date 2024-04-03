@@ -1,2 +1,5 @@
 name: mcp2518fd
 description: Driver for the MCP2518FD CAN FD controller.
+
+environment:
+  sdk: ^2.0.0-alpha.144
