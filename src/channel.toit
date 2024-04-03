@@ -30,7 +30,7 @@ monitor Channel_:
     buffer_[p_] = value
     p_ = n
 
-  try_send value -> bool:
+  try-send value -> bool:
     n := (p_ + 1) % buffer_.size
     if n == c_: return false
     buffer_[p_] = value
@@ -51,7 +51,7 @@ monitor Channel_:
     c_ = (c_ + 1) % buffer_.size
     return value
 
-  try_receive:
+  try-receive:
     if c_ == p_: return null
     value := buffer_[c_]
     c_ = (c_ + 1) % buffer_.size
