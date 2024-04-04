@@ -13,7 +13,7 @@ MISO := gpio.Pin 13
 CLOCK := gpio.Pin 14
 CS := gpio.Pin 15
 
-INT := gpio.Pin 5 --pull_up
+INT := gpio.Pin 5 --pull-up
 
 main:
   bus := spi.Bus --mosi=MOSI --miso=MISO --clock=CLOCK
@@ -24,7 +24,7 @@ main:
   driver.configure
 
   task::
-    INT.config --input
+    INT.configure --input
     driver.run INT
 
   while true:
